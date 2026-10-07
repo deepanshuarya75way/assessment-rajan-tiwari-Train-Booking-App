@@ -85,20 +85,85 @@ trainSchema.methods.checkAvailability = function(classType, date) {
   };
 };
 
-// Method to update seat availability
-trainSchema.methods.updateSeats = async function(classType, seatsToBook) {
-  const classIndex = this.classes.findIndex(c => c.type === classType);
-  
-  if (classIndex === -1) {
-    throw new Error('Class not found');
+// Atomic SEAT comsumption
+
+trainSchema.static.consumeSeats = async function (
+  trainId,
+  classType,
+  seatsToBook
+) {
+  if (!Number.isInteger(seatsToBook) || seatsToBook <= 0){
+    throw new Error("invalid no of seats ");
   }
-  
-  if (this.classes[classIndex].availableSeats < seatsToBook) {
-    throw new Error('Insufficient seats available');
+  return this.findOneAndUpdate(
+    {
+      _id : trainId,
+      classes: {
+        $elemMatch :{
+          type : classType,
+          availableSeats:{
+            $gte : seatsToBook
+          }
+        }
+      }
+    },
+    {
+      $inc : {
+        'classes.$.availableSeats': -seatsToBook
+      }
+    },
+    {
+      new : true, 
+      runValidators:true
+    }
+  );
+};
+trainSchema.static.restoreSeats = async function (
+  trainId,
+  classType,
+  seatsToRestore
+) {
+  if (!Number.isInteger(seatsToRestore) || seatsToRestore <= 0){
+    throw new Error("invalid no of seats ");
   }
-  
-  this.classes[classIndex].availableSeats -= seatsToBook;
-  await this.save();
+  return this.findOneAndUpdate(
+    {
+      _id : trainId,
+      classes: {
+        $elemMatch :{
+          type : classType,
+          availableSeats:{
+            $gte : seatsToBook
+          }
+        }
+      }
+    },
+    {
+      $inc : {
+        'classes.$.availableSeats': -seatsToRestore
+      }
+    },
+    {
+      new : true, 
+      runValidators:true
+    }
+  );
 };
 
-module.exports = mongoose.model('Train', trainSchema);
+trainSchema.method.updateSeats = async function (
+  classType,
+  seatsToBook
+){
+  const updateTrain = await this.constructor.consumeSeats(
+    this._id,
+    classType,
+    seatsToBook
+  );
+  if (! updatedTrain){
+    throw new Error ('Insufficient seats avilable');
+  }
+this.set(updateTrain.toObject());
+return updateTrain;
+};
+
+module.exports = mongoose.model('Train',trainSchema);

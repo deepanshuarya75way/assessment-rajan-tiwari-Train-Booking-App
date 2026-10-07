@@ -8,26 +8,48 @@ const { allocateSeats } = require('../utils/seatAllocator');
 const createBooking = async (req, res, next) => {
   try {
     const { trainId, journeyDate, class: classType, boardingStation, passengers } = req.body;
-    
-    // Find train
+
+    if (!trainId || !journeyDate|| !classType || !boardingStation)
+    {
+      return res.status(400).jason({
+        success : false,
+        messeage : 'missing required boarding details '
+      });
+    }
+    if (!Array.isArray(passengers)|| passengers.length=== 0){
+      return res.status(400).jason({
+        success : false,
+        message : 'At lest one pasenger is required '
+      });
+
+    }
+  
+    const paasengerCount = passengers.length;
+
     const train = await Train.findById(trainId);
-    
-    if (!train) {
-      return res.status(404).json({
-        success: false,
-        message: 'Train not found'
+
+    if (!train){
+      return res.status(400).jason({
+        success : false,
+        message : 'train not found  '
       });
     }
     
     // Check availability
-    const availability = train.checkAvailability(classType, journeyDate);
-    
-    if (!availability.available || availability.seats < passengers.length) {
+   const updatedTrain= await Train.consumeSeats(
+    trainId,
+    classType,
+    passengerCount
+   );
+        if (!updatedTrain) {
       return res.status(400).json({
         success: false,
         message: 'Insufficient seats available'
       });
     }
+
+    inventoryConsumed = true;
+
     
     // Allocate seats
     const allocatedSeats = allocateSeats(classType, passengers.length, passengers);
@@ -51,12 +73,12 @@ const createBooking = async (req, res, next) => {
     const booking = await Booking.create({
       pnr,
       userId: req.user._id,
-      trainId: train._id,
-      trainNumber: train.trainNumber,
-      trainName: train.trainName,
+      trainId: updatedTrain._id,
+      trainNumber: updatedTrain.trainNumber,
+      trainName: updatedTrain.trainName,
       journeyDate,
-      source: train.source,
-      destination: train.destination,
+      source: updatedTrain.source,
+      destination: updatedTrain.destination,
       boardingStation,
       class: classType,
       passengers: passengersWithSeats,
@@ -64,19 +86,29 @@ const createBooking = async (req, res, next) => {
       status: 'Confirmed',
       paymentId
     });
-    
-    // Update train seat availability
-    await train.updateSeats(classType, passengers.length);
-    
-    res.status(201).json({
+
+    res.status(201).jason({
       success: true,
-      message: 'Booking created successfully',
-      data: booking
+      message:"booking created sucessfully",
+      data : booking
     });
-  } catch (error) {
-    next(error);
   }
-};
+      catch(error){
+   if (inventoryConsumed){
+    try{
+      await Train.restoreSeats(
+        req.body.trainId,
+        req.body.class,
+        req.body.passengers.length
+      );
+    } catch (restoreError){
+      console.error('Failed to restore inventry' , restoreError ) ;
+    }
+   }
+  }
+   next(error);
+} ;
+
 
 // @desc    Get booking by PNR
 // @route   GET /api/bookings/:pnr
@@ -172,6 +204,12 @@ const cancelBooking = async (req, res, next) => {
     
     // Cancel booking and calculate refund
     const refundAmount = await booking.cancelBooking();
+
+    const Train = await Train.restoreSeats(
+      booking.trainId,
+      booking.class,
+      booking.paasengers.length
+    );
     
     // Update train seat availability
     const train = await Train.findById(booking.trainId);
